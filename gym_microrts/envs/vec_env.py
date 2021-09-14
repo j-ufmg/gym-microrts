@@ -345,12 +345,14 @@ class MicroRTSScriptVecEnv(MicroRTSGridModeVecEnv):
         #     self.height * self.width, 6
         # ])
         # one script per timestep
-        self.action_space = gym.spaces.Discrete(2)
+        self.action_space = gym.spaces.Discrete(4)
 
     def start_client(self):
 
         ais = [microrts_ai.workerRushAI(self.real_utt),
-               microrts_ai.lightRushAI(self.real_utt)]
+               microrts_ai.lightRushAI(self.real_utt),
+               microrts_ai.rangedRushAI(self.real_utt),
+               microrts_ai.heavyRushAI(self.real_utt)]
 
         from ts import JNIScriptVecClient as Client
         from ai.core import AI
