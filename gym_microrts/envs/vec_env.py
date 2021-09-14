@@ -308,3 +308,73 @@ class MicroRTSBotVecEnv(MicroRTSGridModeVecEnv):
         if jpype._jpype.isStarted():
             self.vec_client.close()
             jpype.shutdownJVM()
+
+class MicroRTSScriptVecEnv(MicroRTSGridModeVecEnv):
+    metadata = {
+        'render.modes': ['human', 'rgb_array'],
+        'video.frames_per_second' : 150
+    }
+    """
+    [[0]x_coordinate*y_coordinate(x*y), [1]a_t(6), [2]p_move(4), [3]p_harvest(4), 
+    [4]p_return(4), [5]p_produce_direction(4), [6]p_produce_unit_type(z), 
+    [7]x_coordinate*y_coordinate(x*y)]
+
+    Create a baselines VecEnv environment from a gym3 environment.
+
+    :param env: gym3 environment to adapt
+    """
+
+    def __init__(self,
+                 partial_obs=False,
+                 max_steps=2000,
+                 render_theme=2,
+                 frame_skip=0,
+                 ai2s=[],
+                 map_path="maps/10x10/basesTwoWorkers10x10.xml",
+                 reward_weight=np.array([0.0, 1.0, 0.0, 0.0, 0.0, 5.0])):
+
+        super(MicroRTSScriptVecEnv, self).__init__(
+            0, len(ai2s), partial_obs, max_steps,
+            render_theme, frame_skip, ai2s, map_path, reward_weight
+        )
+
+        self.num_envs = len(ai2s)
+
+        # one script per unit per timestep
+        # self.action_space = gym.spaces.MultiDiscrete([
+        #     self.height * self.width, 6
+        # ])
+        # one script per timestep
+        self.action_space = gym.spaces.Discrete(2)
+
+    def start_client(self):
+
+        ais = [microrts_ai.workerRushAI(self.real_utt),
+               microrts_ai.lightRushAI(self.real_utt)]
+
+        from ts import JNIScriptVecClient as Client
+        from ai.core import AI
+        self.vec_client = Client(
+            self.max_steps,
+            self.rfs,
+            os.path.expanduser(self.microrts_path),
+            self.map_path,
+            JArray(AI)(ais),
+            JArray(AI)([ai2(self.real_utt) for ai2 in self.ai2s]),
+            self.real_utt,
+            self.partial_obs,
+        )
+        self.render_client = self.vec_client.clients[0]
+        # get the unit type table
+        self.utt = json.loads(str(self.render_client.sendUTT()))
+
+    def step_wait(self):
+        responses = self.vec_client.gameStep([0 for _ in range(self.num_envs)], self.actions)
+        raw_obs, raw_rewards, dones = np.array(responses.observation), np.array(responses.reward), np.array(responses.done)
+
+        obs = np.array([self._encode_obs(ro) for ro in raw_obs])
+        rewards = raw_rewards @ self.reward_weight
+        dones = dones[:, 0]
+        infos = [{"raw_rewards": item} for item in raw_rewards]
+
+        return obs, rewards, dones, infos
