@@ -346,6 +346,7 @@ class MicroRTSScriptVecEnv(MicroRTSGridModeVecEnv):
         # ])
         # one script per timestep
         self.action_space = gym.spaces.Discrete(6)
+        self.reward_range = (-10.0, 10.0)
 
     def start_client(self):
 
