@@ -1,11 +1,13 @@
-
 import os
 import json
 import xml.etree.ElementTree as ET
+from operator import attrgetter
+
 import numpy as np
 from PIL import Image
 
 import gym
+
 import gym_microrts
 from gym_microrts import microrts_ai
 
@@ -14,10 +16,11 @@ from jpype.imports import registerDomain
 import jpype.imports
 from jpype.types import JArray
 
-class MicroRTSGridModeVecEnv:
+
+class MicroRTSGridModeVecEnv(gym.Env):
     metadata = {
         'render.modes': ['human', 'rgb_array'],
-        'video.frames_per_second' : 150
+        'video.frames_per_second': 150
     }
     """
     [[0]x_coordinate*y_coordinate(x*y), [1]a_t(6), [2]p_move(4), [3]p_harvest(4), 
@@ -30,15 +33,15 @@ class MicroRTSGridModeVecEnv:
     """
 
     def __init__(self,
-        num_selfplay_envs,
-        num_bot_envs,
-        partial_obs=False,
-        max_steps=2000,
-        render_theme=2,
-        frame_skip=0,
-        ai2s=[],
-        map_path="maps/10x10/basesTwoWorkers10x10.xml",
-        reward_weight=np.array([0.0, 1.0, 0.0, 0.0, 0.0, 5.0])):
+                 num_selfplay_envs,
+                 num_bot_envs,
+                 partial_obs=False,
+                 max_steps=2000,
+                 render_theme=2,
+                 frame_skip=0,
+                 ai2s=[],
+                 map_path="maps/10x10/basesTwoWorkers10x10.xml",
+                 reward_weight=np.array([0.0, 1.0, 0.0, 0.0, 0.0, 5.0])):
 
         self.num_selfplay_envs = num_selfplay_envs
         self.num_bot_envs = num_bot_envs
@@ -63,7 +66,7 @@ class MicroRTSGridModeVecEnv:
             registerDomain("ai")
             jars = [
                 "microrts.jar", "Coac.jar", "Droplet.jar", "GRojoA3N.jar",
-                "Izanagi.jar", "MixedBot.jar", "RojoBot.jar", "TiamatBot.jar", "UMSBot.jar" # "MindSeal.jar"
+                "Izanagi.jar", "MixedBot.jar", "RojoBot.jar", "TiamatBot.jar", "UMSBot.jar"  # "MindSeal.jar"
             ]
             for jar in jars:
                 jpype.addClassPath(os.path.join(self.microrts_path, jar))
@@ -72,10 +75,12 @@ class MicroRTSGridModeVecEnv:
         # start microrts client
         from rts.units import UnitTypeTable
         self.real_utt = UnitTypeTable()
-        from ai.rewardfunction import RewardFunctionInterface, WinLossRewardFunction, ResourceGatherRewardFunction, AttackRewardFunction, ProduceWorkerRewardFunction, ProduceBuildingRewardFunction, ProduceCombatUnitRewardFunction, CloserToEnemyBaseRewardFunction
+        from ai.rewardfunction import RewardFunctionInterface, WinLossRewardFunction, ResourceGatherRewardFunction, \
+            AttackRewardFunction, ProduceWorkerRewardFunction, ProduceBuildingRewardFunction, \
+            ProduceCombatUnitRewardFunction, CloserToEnemyBaseRewardFunction
         self.rfs = JArray(RewardFunctionInterface)([
-            WinLossRewardFunction(), 
-            ResourceGatherRewardFunction(),  
+            WinLossRewardFunction(),
+            ResourceGatherRewardFunction(),
             ProduceWorkerRewardFunction(),
             ProduceBuildingRewardFunction(),
             AttackRewardFunction(),
@@ -88,14 +93,12 @@ class MicroRTSGridModeVecEnv:
         # [num_planes_hp(5), num_planes_resources(5), num_planes_player(5), 
         # num_planes_unit_type(z), num_planes_unit_action(6)]
 
-        self.num_planes = [5, 5, 3, len(self.utt['unitTypes'])+1, 6]
+        self.num_planes = [5, 5, 3, len(self.utt['unitTypes']) + 1, 6]
         if partial_obs:
-            self.num_planes = [5, 5, 3, len(self.utt['unitTypes'])+1, 6, 2]
-        self.observation_space = gym.spaces.Box(low=0.0,
-            high=1.0,
-            shape=(self.height, self.width,
-                    sum(self.num_planes)),
-                    dtype=np.int32)
+            self.num_planes = [5, 5, 3, len(self.utt['unitTypes']) + 1, 6, 2]
+        self.observation_space = gym.spaces.Box(
+            low=0.0, high=1.0,
+            shape=(self.height, self.width, sum(self.num_planes)), dtype=np.uint8)
         self.action_space = gym.spaces.MultiDiscrete([
             self.height * self.width,
             6, 4, 4, 4, 4,
@@ -118,26 +121,28 @@ class MicroRTSGridModeVecEnv:
             self.real_utt,
             self.partial_obs,
         )
-        self.render_client = self.vec_client.selfPlayClients[0] if len(self.vec_client.selfPlayClients) > 0 else self.vec_client.clients[0]
+        self.render_client = self.vec_client.selfPlayClients[0] if len(self.vec_client.selfPlayClients) > 0 else \
+        self.vec_client.clients[0]
         # get the unit type table
         self.utt = json.loads(str(self.render_client.sendUTT()))
 
     def reset(self):
         responses = self.vec_client.reset([0 for _ in range(self.num_envs)])
-        raw_obs, reward, done, info = np.array(responses.observation), np.array(responses.reward), np.array(responses.done), {}
+        raw_obs, reward, done, info = np.array(responses.observation), np.array(responses.reward), np.array(
+            responses.done), {}
         obs = []
         for ro in raw_obs:
             obs += [self._encode_obs(ro)]
         return np.array(obs)
 
     def _encode_obs(self, obs):
-        obs = obs.reshape(len(obs), -1).clip(0, np.array([self.num_planes]).T-1)
-        obs_planes = np.zeros((self.height * self.width, 
+        obs = obs.reshape(len(obs), -1).clip(0, np.array([self.num_planes]).T - 1)
+        obs_planes = np.zeros((self.height * self.width,
                                sum(self.num_planes)), dtype=np.int)
-        obs_planes[np.arange(len(obs_planes)),obs[0]] = 1
+        obs_planes[np.arange(len(obs_planes)), obs[0]] = 1
 
         for i in range(1, len(self.num_planes)):
-            obs_planes[np.arange(len(obs_planes)),obs[i]+sum(self.num_planes[:i])] = 1
+            obs_planes[np.arange(len(obs_planes)), obs[i] + sum(self.num_planes[:i])] = 1
         return obs_planes.reshape(self.height, self.width, -1)
 
     def step_async(self, actions):
@@ -150,7 +155,7 @@ class MicroRTSGridModeVecEnv:
         for ro in raw_obs:
             obs += [self._encode_obs(ro)]
         infos = [{"raw_rewards": item} for item in reward]
-        return np.array(obs), reward @ self.reward_weight, done[:,0], infos
+        return np.array(obs), reward @ self.reward_weight, done[:, 0], infos
 
     def step(self, ac):
         self.step_async(ac)
@@ -174,27 +179,28 @@ class MicroRTSGridModeVecEnv:
         elif mode == 'rgb_array':
             bytes_array = np.array(self.render_client.render(True))
             image = Image.frombytes("RGB", (640, 640), bytes_array)
-            return np.array(image)[:,:,::-1]
+            return np.array(image)[:, :, ::-1]
 
     def close(self):
         if jpype._jpype.isStarted():
             self.vec_client.close()
             jpype.shutdownJVM()
 
+
 class MicroRTSBotVecEnv(MicroRTSGridModeVecEnv):
     metadata = {
         'render.modes': ['human', 'rgb_array'],
-        'video.frames_per_second' : 150
+        'video.frames_per_second': 150
     }
 
     def __init__(self,
-        ai1s=[],
-        ai2s=[],
-        partial_obs=False,
-        max_steps=2000,
-        render_theme=2,
-        map_path="maps/10x10/basesTwoWorkers10x10.xml",
-        reward_weight=np.array([0.0, 1.0, 0.0, 0.0, 0.0, 5.0])):
+                 ai1s=[],
+                 ai2s=[],
+                 partial_obs=False,
+                 max_steps=2000,
+                 render_theme=2,
+                 map_path="maps/10x10/basesTwoWorkers10x10.xml",
+                 reward_weight=np.array([0.0, 1.0, 0.0, 0.0, 0.0, 5.0])):
 
         self.ai1s = ai1s
         self.ai2s = ai2s
@@ -217,7 +223,7 @@ class MicroRTSBotVecEnv(MicroRTSGridModeVecEnv):
             registerDomain("ai")
             jars = [
                 "microrts.jar", "Coac.jar", "Droplet.jar", "GRojoA3N.jar",
-                "Izanagi.jar", "MixedBot.jar", "RojoBot.jar", "TiamatBot.jar", "UMSBot.jar" # "MindSeal.jar"
+                "Izanagi.jar", "MixedBot.jar", "RojoBot.jar", "TiamatBot.jar", "UMSBot.jar"  # "MindSeal.jar"
             ]
             for jar in jars:
                 jpype.addClassPath(os.path.join(self.microrts_path, jar))
@@ -226,10 +232,12 @@ class MicroRTSBotVecEnv(MicroRTSGridModeVecEnv):
         # start microrts client
         from rts.units import UnitTypeTable
         self.real_utt = UnitTypeTable()
-        from ai.rewardfunction import RewardFunctionInterface, WinLossRewardFunction, ResourceGatherRewardFunction, AttackRewardFunction, ProduceWorkerRewardFunction, ProduceBuildingRewardFunction, ProduceCombatUnitRewardFunction, CloserToEnemyBaseRewardFunction
+        from ai.rewardfunction import RewardFunctionInterface, WinLossRewardFunction, ResourceGatherRewardFunction, \
+            AttackRewardFunction, ProduceWorkerRewardFunction, ProduceBuildingRewardFunction, \
+            ProduceCombatUnitRewardFunction, CloserToEnemyBaseRewardFunction
         self.rfs = JArray(RewardFunctionInterface)([
-            WinLossRewardFunction(), 
-            ResourceGatherRewardFunction(),  
+            WinLossRewardFunction(),
+            ResourceGatherRewardFunction(),
             ProduceWorkerRewardFunction(),
             ProduceBuildingRewardFunction(),
             AttackRewardFunction(),
@@ -242,9 +250,9 @@ class MicroRTSBotVecEnv(MicroRTSGridModeVecEnv):
         # [num_planes_hp(5), num_planes_resources(5), num_planes_player(5), 
         # num_planes_unit_type(z), num_planes_unit_action(6)]
 
-        self.num_planes = [5, 5, 3, len(self.utt['unitTypes'])+1, 6]
+        self.num_planes = [5, 5, 3, len(self.utt['unitTypes']) + 1, 6]
         if partial_obs:
-            self.num_planes = [5, 5, 3, len(self.utt['unitTypes'])+1, 6, 2]
+            self.num_planes = [5, 5, 3, len(self.utt['unitTypes']) + 1, 6, 2]
         self.observation_space = gym.spaces.Discrete(2)
         self.action_space = gym.spaces.Discrete(2)
 
@@ -268,7 +276,8 @@ class MicroRTSBotVecEnv(MicroRTSGridModeVecEnv):
 
     def reset(self):
         responses = self.vec_client.reset([0 for _ in range(self.num_envs)])
-        raw_obs, reward, done, info = np.ones((self.num_envs,2)), np.array(responses.reward), np.array(responses.done), {}
+        raw_obs, reward, done, info = np.ones((self.num_envs, 2)), np.array(responses.reward), np.array(
+            responses.done), {}
         return raw_obs
 
     def step_async(self, actions):
@@ -276,9 +285,9 @@ class MicroRTSBotVecEnv(MicroRTSGridModeVecEnv):
 
     def step_wait(self):
         responses = self.vec_client.gameStep(self.actions, [0 for _ in range(self.num_envs)])
-        raw_obs, reward, done = np.ones((self.num_envs,2)), np.array(responses.reward), np.array(responses.done)
+        raw_obs, reward, done = np.ones((self.num_envs, 2)), np.array(responses.reward), np.array(responses.done)
         infos = [{"raw_rewards": item} for item in reward]
-        return raw_obs, reward @ self.reward_weight, done[:,0], infos
+        return raw_obs, reward @ self.reward_weight, done[:, 0], infos
 
     def step(self, ac):
         self.step_async(ac)
@@ -302,17 +311,18 @@ class MicroRTSBotVecEnv(MicroRTSGridModeVecEnv):
         elif mode == 'rgb_array':
             bytes_array = np.array(self.render_client.render(True))
             image = Image.frombytes("RGB", (640, 640), bytes_array)
-            return np.array(image)[:,:,::-1]
+            return np.array(image)[:, :, ::-1]
 
     def close(self):
         if jpype._jpype.isStarted():
             self.vec_client.close()
             jpype.shutdownJVM()
 
+
 class MicroRTSScriptVecEnv(MicroRTSGridModeVecEnv):
     metadata = {
         'render.modes': ['human', 'rgb_array'],
-        'video.frames_per_second' : 150
+        'video.frames_per_second': 150
     }
     """
     [[0]x_coordinate*y_coordinate(x*y), [1]a_t(6), [2]p_move(4), [3]p_harvest(4), 
@@ -332,7 +342,6 @@ class MicroRTSScriptVecEnv(MicroRTSGridModeVecEnv):
                  ai2s=[],
                  map_path="maps/10x10/basesTwoWorkers10x10.xml",
                  reward_weight=np.array([0.0, 1.0, 0.0, 0.0, 0.0, 5.0])):
-
         super(MicroRTSScriptVecEnv, self).__init__(
             0, len(ai2s), partial_obs, max_steps,
             render_theme, frame_skip, ai2s, map_path, reward_weight
@@ -349,7 +358,6 @@ class MicroRTSScriptVecEnv(MicroRTSGridModeVecEnv):
         self.reward_range = (-10.0, 10.0)
 
     def start_client(self):
-
         ais = [microrts_ai.workerRushAI(self.real_utt),
                microrts_ai.lightRushAI(self.real_utt),
                microrts_ai.rangedRushAI(self.real_utt),
@@ -375,7 +383,8 @@ class MicroRTSScriptVecEnv(MicroRTSGridModeVecEnv):
 
     def step_wait(self):
         responses = self.vec_client.gameStep([0 for _ in range(self.num_envs)], self.actions)
-        raw_obs, raw_rewards, dones = np.array(responses.observation), np.array(responses.reward), np.array(responses.done)
+        raw_obs, raw_rewards, dones = np.array(responses.observation), np.array(responses.reward), np.array(
+            responses.done)
 
         obs = np.array([self._encode_obs(ro) for ro in raw_obs])
         rewards = raw_rewards @ self.reward_weight
@@ -383,3 +392,36 @@ class MicroRTSScriptVecEnv(MicroRTSGridModeVecEnv):
         infos = [{"raw_rewards": item} for item in raw_rewards]
 
         return obs, rewards, dones, infos
+
+
+class MicroRTSScriptEnv(MicroRTSScriptVecEnv):
+
+    def __init__(self,
+                 partial_obs=False,
+                 max_steps=2000,
+                 render_theme=2,
+                 frame_skip=0,
+                 ai2=None,
+                 map_path="maps/10x10/basesTwoWorkers10x10.xml",
+                 reward_weight=np.array([0.0, 1.0, 0.0, 0.0, 0.0, 5.0])):
+        ai2s = [attrgetter(ai2)(microrts_ai)]
+
+        super(MicroRTSScriptEnv, self).__init__(partial_obs, max_steps, render_theme, frame_skip,
+                                                ai2s, map_path, reward_weight)
+
+        self.episodes = 0
+
+    def reset(self):
+        obs = super(MicroRTSScriptEnv, self).reset()
+
+        return obs[0]
+
+    def step(self, ac):
+        obs, rewards, dones, infos = super(MicroRTSScriptEnv, self).step([ac])
+
+        done = bool(dones[0])
+
+        if done:
+            self.episodes += 1
+
+        return obs[0], rewards[0], done, infos[0]
