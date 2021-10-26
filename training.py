@@ -3,7 +3,6 @@ import os
 import sys
 
 import numpy as np
-from stable_baselines3.common.env_checker import check_env
 
 from gym_microrts.envs.vec_env import MicroRTSScriptEnv
 from experiments.scripts.trainer import FixedAdversary, model_builder_mlp
@@ -76,11 +75,6 @@ def run():
         'map_path': 'maps/16x16/basesWorkers16x16.xml',
         'reward_weight': np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0])
     }
-
-    '''env = env_builder(**env_params)
-    check_env(env)
-    env.close()
-    exit(0)'''
 
     eval_env_params = env_params
 
