@@ -32,7 +32,7 @@ class TrainingSession:
 
         # initialize results
         self.checkpoints = []
-        self.win_rates = []
+        self.mean_rewards = []
         self.episode_lengths = []
         self.action_histograms = []
         self.start_time, self.end_time = None, None
@@ -51,7 +51,7 @@ class TrainingSession:
 
         with open(results_path, 'w') as file:
             info = dict(**self.params, seed=self.seed, checkpoints=self.checkpoints,
-                        win_rates=self.win_rates, ep_lengths=self.episode_lengths,
+                        mean_rewards=self.mean_rewards, ep_lengths=self.episode_lengths,
                         action_histograms=self.action_histograms,
                         start_time=str(self.start_time), end_time=str(self.end_time))
             info = json.dumps(info, indent=2)
@@ -159,7 +159,7 @@ class FixedAdversary(TrainingSession):
 
             # save the results
             self.checkpoints.append(episodes_so_far)
-            self.win_rates.append((mean_reward + 1) / 2)
+            self.mean_rewards.append(mean_reward)
             self.episode_lengths.append(ep_length)
             self.action_histograms.append(act_hist)
 
@@ -191,7 +191,7 @@ class FixedAdversary(TrainingSession):
             pass
 
         # save and evaluate final model, if not done yet
-        if len(self.win_rates) < self.num_evals:
+        if len(self.mean_rewards) < self.num_evals:
             self._training_callback()
 
         # close the envs
@@ -328,7 +328,7 @@ class SelfPlay(TrainingSession):
 
             # save the results
             self.checkpoints.append(episodes_so_far)
-            self.win_rates.append((mean_reward + 1) / 2)
+            self.win_rates.append(mean_reward)
             self.episode_lengths.append(ep_length)
             self.action_histograms.append(act_hist)
 
@@ -510,7 +510,7 @@ class AsymmetricSelfPlay(TrainingSession):
 
             # save the results
             self.checkpoints[model.role_id].append(episodes_so_far)
-            self.win_rates[model.role_id].append((mean_reward + 1) / 2)
+            self.win_rates[model.role_id].append(mean_reward)
             self.episode_lengths[model.role_id].append(ep_length)
             self.action_histograms[model.role_id].append(act_hist)
 
