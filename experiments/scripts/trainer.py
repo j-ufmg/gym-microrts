@@ -33,6 +33,8 @@ class TrainingSession:
         # initialize results
         self.checkpoints = []
         self.mean_rewards = []
+        self.win_rates = []
+        self.draw_rates = []
         self.episode_lengths = []
         self.action_histograms = []
         self.start_time, self.end_time = None, None
@@ -51,7 +53,8 @@ class TrainingSession:
 
         with open(results_path, 'w') as file:
             info = dict(**self.params, seed=self.seed, checkpoints=self.checkpoints,
-                        mean_rewards=self.mean_rewards, ep_lengths=self.episode_lengths,
+                        mean_rewards=self.mean_rewards, win_rates=self.win_rates,
+                        draw_rates=self.draw_rates, ep_lengths=self.episode_lengths,
                         action_histograms=self.action_histograms,
                         start_time=str(self.start_time), end_time=str(self.end_time))
             info = json.dumps(info, indent=2)
@@ -149,7 +152,7 @@ class FixedAdversary(TrainingSession):
             self.logger.info(f"Evaluating model ({episodes_so_far} episodes)...")
             start_time = time.perf_counter()
 
-            mean_reward, ep_length, act_hist = \
+            mean_reward, ep_length, act_hist, win_rate, draw_rate = \
                 self.evaluator.run(self.model, play_first=self.model.role_id == 0)
 
             end_time = time.perf_counter()
@@ -160,6 +163,8 @@ class FixedAdversary(TrainingSession):
             # save the results
             self.checkpoints.append(episodes_so_far)
             self.mean_rewards.append(mean_reward)
+            self.win_rates.append(win_rate)
+            self.draw_rates.append(draw_rate)
             self.episode_lengths.append(ep_length)
             self.action_histograms.append(act_hist)
 
@@ -309,15 +314,17 @@ class SelfPlay(TrainingSession):
 
             if self.evaluator.seed is not None:
                 self.evaluator.seed = self.seed + self.train_episodes
-            mean_reward, ep_length, act_hist = \
+            mean_reward, ep_length, act_hist, win_rate, draw_rate = \
                 self.evaluator.run(model, play_first=True)
 
             if self.evaluator.seed is not None:
                 self.evaluator.seed += self.eval_episodes
-            mean_reward2, ep_length2, act_hist2 = \
+            mean_reward2, ep_length2, act_hist2, win_rate2, draw_rate2 = \
                 self.evaluator.run(model, play_first=False)
 
             mean_reward = (mean_reward + mean_reward2) / 2
+            win_rate = (win_rate + win_rate2) / 2
+            draw_rate = (draw_rate + draw_rate2) / 2
             ep_length = (ep_length + ep_length2) / 2
             act_hist = [(act_hist[i] + act_hist2[i]) / 2 for i in range(3)]
 
@@ -328,7 +335,9 @@ class SelfPlay(TrainingSession):
 
             # save the results
             self.checkpoints.append(episodes_so_far)
-            self.win_rates.append(mean_reward)
+            self.mean_rewards.append(mean_reward)
+            self.win_rates.append(win_rate)
+            self.draw_rates.append(draw_rate)
             self.episode_lengths.append(ep_length)
             self.action_histograms.append(act_hist)
 
@@ -473,7 +482,9 @@ class AsymmetricSelfPlay(TrainingSession):
 
         # initialize results
         self.checkpoints = [], []
+        self.mean_rewards = [], []
         self.win_rates = [], []
+        self.draw_rates = [], []
         self.episode_lengths = [], []
         self.action_histograms = [], []
 
@@ -500,7 +511,7 @@ class AsymmetricSelfPlay(TrainingSession):
                              f"({episodes_so_far} episodes)...")
             start_time = time.perf_counter()
 
-            mean_reward, ep_length, act_hist = \
+            mean_reward, ep_length, act_hist, win_rate, draw_rate = \
                 self.evaluator.run(model, play_first=model.role_id == 0)
 
             end_time = time.perf_counter()
@@ -510,7 +521,9 @@ class AsymmetricSelfPlay(TrainingSession):
 
             # save the results
             self.checkpoints[model.role_id].append(episodes_so_far)
-            self.win_rates[model.role_id].append(mean_reward)
+            self.mean_rewards[model.role_id].append(mean_reward)
+            self.win_rates[model.role_id].append(win_rate)
+            self.draw_rates[model.role_id].append(draw_rate)
             self.episode_lengths[model.role_id].append(ep_length)
             self.action_histograms[model.role_id].append(act_hist)
 
@@ -629,6 +642,7 @@ class Evaluator:
 
         # initialize metrics
         episodes_so_far = 0
+        wins, draws = 0, 0
         episode_rewards = [[0.0] for _ in range(self.env.num_envs)]
         episode_lengths = [[0] for _ in range(self.env.num_envs)]
         action_histogram = [0] * self.env.action_space.n
@@ -643,7 +657,7 @@ class Evaluator:
                 action_histogram[action] += 1
 
             # perform the action and get the outcome
-            observations, rewards, dones, _ = self.env.step(actions)
+            observations, rewards, dones, infos = self.env.step(actions)
 
             # update metrics
             for i in range(self.env.num_envs):
@@ -655,6 +669,13 @@ class Evaluator:
                     episode_lengths[i].append(0)
 
                     episodes_so_far += 1
+
+                    win_loss_reward = infos[i]['raw_rewards'][0]
+
+                    if win_loss_reward > 0:
+                        wins = 0
+                    elif win_loss_reward == 0:
+                        draws = 0
 
             # check exiting condition
             if episodes_so_far >= self.episodes:
@@ -674,7 +695,7 @@ class Evaluator:
         all_rewards = all_rewards[:self.episodes]
         all_lengths = all_lengths[:self.episodes]
 
-        return mean(all_rewards), mean(all_lengths), action_histogram
+        return mean(all_rewards), mean(all_lengths), action_histogram, wins / self.episodes, draws / self.episodes
 
     def close(self):
         self.env.close()
