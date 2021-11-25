@@ -673,9 +673,9 @@ class Evaluator:
                     win_loss_reward = infos[i]['raw_rewards'][0]
 
                     if win_loss_reward > 0:
-                        wins = 0
+                        wins += 1
                     elif win_loss_reward == 0:
-                        draws = 0
+                        draws += 1
 
             # check exiting condition
             if episodes_so_far >= self.episodes:
