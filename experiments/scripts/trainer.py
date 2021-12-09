@@ -11,11 +11,13 @@ from abc import abstractmethod
 from datetime import datetime
 from statistics import mean
 
+from stable_baselines3.common.callbacks import CallbackList, BaseCallback
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from torch.nn.modules.activation import Tanh, ReLU, ELU
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv
 from stable_baselines3.ppo import CnnPolicy
+from wandb.integration.sb3 import WandbCallback
 
 verbose = True
 REALLY_BIG_INT = 1_000_000_000
@@ -25,7 +27,7 @@ if verbose:
 
 
 class TrainingSession:
-    def __init__(self, params, path, seed):
+    def __init__(self, params, path, seed, wandb_run=None):
         # initialize logger
         self.logger = logging.getLogger('{0}.{1}'.format(__name__,
                                                          type(self).__name__))
@@ -38,6 +40,7 @@ class TrainingSession:
         self.episode_lengths = []
         self.action_histograms = []
         self.start_time, self.end_time = None, None
+        self.wandb_run = wandb_run
 
         # save parameters
         self.params = params
@@ -82,8 +85,8 @@ class TrainingSession:
 class FixedAdversary(TrainingSession):
     def __init__(self, model_builder, model_params, env_builder, env_params, eval_env_params,
                  train_episodes, eval_episodes, num_evals, play_first, path,
-                 seed, num_envs=1):
-        super(FixedAdversary, self).__init__(model_params, path, seed)
+                 seed, num_envs=1, wandb_run=None):
+        super(FixedAdversary, self).__init__(model_params, path, seed, wandb_run=wandb_run)
 
         # log start time
         start_time = time.perf_counter()
@@ -175,6 +178,22 @@ class FixedAdversary(TrainingSession):
             # write partial results to file
             self._save_results()
 
+            # upload stats to wandb, if enabled
+            if self.wandb_run:
+                info = dict(checkpoint=episodes_so_far,
+                            mean_reward=mean_reward, win_rate=win_rate,
+                            draw_rate=draw_rate, mean_ep_length=ep_length)
+
+                if len(act_hist) == 6:
+                    info['worker_rush'] = act_hist[0]
+                    info['light_rush'] = act_hist[1]
+                    info['ranged_rush'] = act_hist[2]
+                    info['heavy_rush'] = act_hist[3]
+                    info['expand'] = act_hist[4]
+                    info['build_barracks'] = act_hist[5]
+
+                self.wandb_run.log(info)
+
         # if training should end, return False to end training
         training_is_finished = episodes_so_far >= self.train_episodes
 
@@ -187,11 +206,21 @@ class FixedAdversary(TrainingSession):
         # save and evaluate starting model
         self._training_callback()
 
+        class TrainingCallback(BaseCallback):
+            def __init__(self, verbose=0):
+                super(TrainingCallback, self).__init__(verbose)
+
+            def _on_step(self2):
+                return self._training_callback()
+
         try:
             # train the model
             # note: dynamic learning or clip rates will require accurate # of timesteps
             self.model.learn(total_timesteps=REALLY_BIG_INT,  # we'll stop manually
-                             callback=self._training_callback)
+                             callback=CallbackList([
+                                 TrainingCallback(),
+                                 WandbCallback(gradient_save_freq=100, verbose=2)
+                             ]))
         except KeyboardInterrupt:
             pass
 
@@ -207,8 +236,8 @@ class FixedAdversary(TrainingSession):
 class SelfPlay(TrainingSession):
     def __init__(self, model_builder, model_params, env_builder, env_params, eval_env_params,
                  train_episodes, eval_episodes, num_evals, switch_frequency, path,
-                 seed, num_envs=1):
-        super(SelfPlay, self).__init__(model_params, path, seed)
+                 seed, num_envs=1, wandb_run=None):
+        super(SelfPlay, self).__init__(model_params, path, seed, wandb_run=wandb_run)
 
         # log start time
         start_time = time.perf_counter()
@@ -348,6 +377,22 @@ class SelfPlay(TrainingSession):
             # write partial results to file
             self._save_results()
 
+            # upload stats to wandb, if enabled
+            if self.wandb_run:
+                info = dict(checkpoint=episodes_so_far,
+                            mean_reward=mean_reward, win_rate=win_rate,
+                            draw_rate=draw_rate, mean_ep_length=ep_length)
+
+                if len(act_hist) == 6:
+                    info['worker_rush'] = act_hist[0]
+                    info['light_rush'] = act_hist[1]
+                    info['ranged_rush'] = act_hist[2]
+                    info['heavy_rush'] = act_hist[3]
+                    info['expand'] = act_hist[4]
+                    info['build_barracks'] = act_hist[5]
+
+                self.wandb_run.log(info)
+
         # if training should end, return False to end training
         training_is_finished = episodes_so_far >= model.next_switch
 
@@ -398,8 +443,8 @@ class SelfPlay(TrainingSession):
 class AsymmetricSelfPlay(TrainingSession):
     def __init__(self, model_builder, model_params, env_builder, env_params, eval_env_params,
                  train_episodes, eval_episodes, num_evals,
-                 switch_frequency, path, seed, num_envs=1):
-        super(AsymmetricSelfPlay, self).__init__(model_params, path, seed)
+                 switch_frequency, path, seed, num_envs=1, wandb_run=None):
+        super(AsymmetricSelfPlay, self).__init__(model_params, path, seed, wandb_run=wandb_run)
 
         # log start time
         start_time = time.perf_counter()
@@ -533,6 +578,24 @@ class AsymmetricSelfPlay(TrainingSession):
 
             # write partial results to file
             self._save_results()
+
+            # upload stats to wandb, if enabled
+            if self.wandb_run:
+                info = {'checkpoint': episodes_so_far,
+                        'mean_reward_' + model.role_id: mean_reward,
+                        'win_rate_' + model.role_id: win_rate,
+                        'draw_rate_' + model.role_id: draw_rate,
+                        'mean_ep_length_' + model.role_id: ep_length}
+
+                if len(act_hist) == 6:
+                    info['worker_rush'] = act_hist[0]
+                    info['light_rush'] = act_hist[1]
+                    info['ranged_rush'] = act_hist[2]
+                    info['heavy_rush'] = act_hist[3]
+                    info['expand'] = act_hist[4]
+                    info['build_barracks'] = act_hist[5]
+
+                self.wandb_run.log(info)
 
         # if training should end, return False to end training
         training_is_finished = episodes_so_far >= model.next_switch
@@ -718,7 +781,7 @@ def save_model_as_json(model, act_fun, path):
 
 
 def model_builder_mlp(env, seed, neurons, layers, activation, n_steps, nminibatches,
-                      noptepochs, cliprange, vf_coef, ent_coef, learning_rate):
+                      noptepochs, cliprange, vf_coef, ent_coef, learning_rate, tensorboard_log):
     net_arch = [neurons] * layers
     activation = dict(tanh=Tanh, relu=ReLU, elu=ELU)[activation]
 
@@ -728,7 +791,8 @@ def model_builder_mlp(env, seed, neurons, layers, activation, n_steps, nminibatc
                    features_extractor_kwargs=dict(features_dim=256)),
                n_steps=n_steps, batch_size=nminibatches,
                n_epochs=noptepochs, clip_range=cliprange,
-               vf_coef=vf_coef, ent_coef=ent_coef, learning_rate=learning_rate)
+               vf_coef=vf_coef, ent_coef=ent_coef, learning_rate=learning_rate,
+               tensorboard_log=tensorboard_log)
 
 
 class CustomCNN(BaseFeaturesExtractor):

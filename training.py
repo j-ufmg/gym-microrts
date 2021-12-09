@@ -3,6 +3,7 @@ import os
 import sys
 
 import numpy as np
+import wandb
 
 from gym_microrts.envs.vec_env import MicroRTSScriptEnv
 from experiments.scripts.trainer import FixedAdversary, model_builder_mlp
@@ -82,14 +83,25 @@ def run():
                     'n_steps': args.n_steps, 'nminibatches': args.nminibatches,
                     'noptepochs': args.noptepochs, 'cliprange': args.cliprange,
                     'vf_coef': args.vf_coef, 'ent_coef': args.ent_coef,
-                    'activation': args.act_fun, 'learning_rate': args.learning_rate}
+                    'activation': args.act_fun, 'learning_rate': args.learning_rate,
+                    'tensorboard_log': args.path + '/tf_logs'}
+
+    run = wandb.init(
+        project="gym-microrts-scripts",
+        entity="ronaldosvieira",
+        sync_tensorboard=True,
+        config=args
+    )
 
     trainer = FixedAdversary(model_builder_mlp, model_params, env_builder,
                              env_params, eval_env_params, args.train_episodes,
                              args.eval_episodes, args.num_evals,
-                             True, args.path, args.seed, args.concurrency)
+                             True, args.path, args.seed, args.concurrency,
+                             wandb_run=run)
 
     trainer.run()
+
+    run.finish()
 
 
 if __name__ == "__main__":
